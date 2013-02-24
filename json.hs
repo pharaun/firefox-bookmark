@@ -96,18 +96,28 @@ main :: IO ()
 main = do
     test <- L.readFile "./bookmarks-2013-02-22.json"
     let y = eitherDecode' test :: Either String Primary
-    putStrLn $ unpack $ collectValue (\i -> fromMaybe "" $ charset i) y
+    putStrLn $ unpack $ processJSON (\i -> fromMaybe "" $ charset i) y
+    putStrLn $ unpack $ processJSON (\i -> iterList (\j -> name j) (annos i)) y
 
-collectValue :: (Primary -> Text) -> Either String Primary -> Text
-collectValue f (Left x)  = pack x
-collectValue f (Right x) = childIterate f $ Just [x]
+processJSON :: (Primary -> Text) -> Either String Primary -> Text
+processJSON _ (Left x)  = pack x
+processJSON f (Right x) = iterChild f $ Just [x]
+
+iterChild :: (Primary -> Text) -> Maybe [Primary] -> Text
+iterChild _ Nothing   = ""
+iterChild f (Just xs) = foldl buildString "" xs
     where
-        childIterate :: (Primary -> Text) -> Maybe [Primary] -> Text
-        childIterate _ Nothing   = ""
-        childIterate f (Just xs) = foldl (folder f) "" xs
+        buildString :: Text -> Primary -> Text
+        buildString a b = foldl append "" [a, f b, "\n", (iterChild f $ children b)]
 
-        folder :: (Primary -> Text) -> Text -> Primary -> Text
-        folder f a b = foldl append "" [a, f b, "\n", childIterate f $ children b]
+iterList :: (Annos -> Text) -> Maybe [Annos] -> Text
+iterList _ Nothing   = ""
+iterList f (Just xs) = foldl buildString "" xs
+    where
+        buildString :: Text -> Annos -> Text
+        buildString a b = foldl append "" [a, f b, "\n"]
+
+
 
 
 -- data Primary = Primary
