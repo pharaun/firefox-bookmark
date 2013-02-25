@@ -19,17 +19,23 @@
 --      u'value': u'foobar'}
 --      ],
 -- u'uri': u'http://en.wikipedia.org/wiki/RAID'}],
---
 
 import Prelude hiding (concat, id)
+import Control.Applicative ((<$>), (<*>), pure)
+import Control.Monad (mzero, liftM)
 import Data.Aeson
 import Data.Aeson.Types (Parser)
 import Data.Maybe
-import Data.Text hiding (map, foldl, foldr, index)
-import Control.Applicative ((<$>), (<*>), pure)
-import Control.Monad (mzero)
+import Data.Either
 import qualified Data.ByteString.Lazy as L
 import qualified Data.HashMap.Strict as H
+import qualified Data.Text as T
+
+data Root = BookmarkMenuFolder | PlacesRoot | TagsFolder | ToolbarFolder | UnfiledBookmarksFolder
+    deriving (Show, Eq)
+
+data PType = Place | PlaceContainer | PlaceSeparator
+    deriving (Show, Eq)
 
 data Primary = Primary
     { dateAdded :: Integer
@@ -37,23 +43,27 @@ data Primary = Primary
     , index :: Maybe Integer
     , lastModified :: Integer
     , parent :: Maybe Integer
-    , title :: Maybe Text
-    , keyword :: Maybe Text
-    , ptype :: Text
-    , uri :: Maybe Text
+    , title :: Maybe T.Text
+    , keyword :: Maybe T.Text
+    , ptype :: PType
+    , uri :: Maybe T.Text
     , children :: Maybe [Primary]
-    , root :: Maybe Text
-    , charset :: Maybe Text
+    , root :: Maybe Root
+    , charset :: Maybe T.Text
     , annos :: Maybe [Annos]
     } deriving (Show)
+
+data AType = LoadInSidebar | FolderLastUsed | Description
+    deriving (Show, Eq)
 
 data Annos = Annos
     { expires :: Integer
     , flags :: Integer
-    , mimeType :: Maybe Text
-    , name :: Text
+    , mimeType :: Maybe T.Text
+    , name :: T.Text
     , atype :: Integer
-    , value :: Either Integer Text
+--    , atype :: AType
+    , value :: Either Integer T.Text
     } deriving (Show)
 
 instance FromJSON Primary where
@@ -66,10 +76,10 @@ instance FromJSON Primary where
         <*> (v .:? "parent")
         <*> (v .: "title")
         <*> (v .:? "keyword")
-        <*> (v .: "type")
+        <*> parsePType v
         <*> (v .:? "uri")
         <*> (parseJSON =<< (v .:? "children" .!= Null))
-        <*> (v .:? "root")
+        <*> parseRoot v
         <*> (v .:? "charset")
         <*> (parseJSON =<< (v .:? "annos" .!= Null))
     parseJSON _ = mzero
@@ -85,15 +95,39 @@ instance FromJSON Annos where
         <*> parseValue v
     parseJSON _ = mzero
 
-parseValue :: Object -> Parser (Either Integer Text)
+parsePType :: Object -> Parser PType
+parsePType x = case H.lookup "type" x of
+    Nothing -> fail "key type not present"
+    Just v  -> convertToPType v
+    where
+        convertToPType :: Value -> Parser PType
+        convertToPType (String "text/x-moz-place-separator") = pure PlaceSeparator
+        convertToPType (String "text/x-moz-place-container") = pure PlaceContainer
+        convertToPType (String "text/x-moz-place")           = pure Place
+        convertToPType _                                     = fail "undefined text/x-moz-* type"
+
+parseRoot :: Object -> Parser (Maybe Root)
+parseRoot x = case H.lookup "root" x of
+    Nothing -> pure Nothing
+    Just v  -> convertToRoot v
+    where
+        convertToRoot :: Value -> Parser (Maybe Root)
+        convertToRoot (String "unfiledBookmarksFolder") = pure $ Just UnfiledBookmarksFolder
+        convertToRoot (String "bookmarksMenuFolder")    = pure $ Just BookmarkMenuFolder
+        convertToRoot (String "toolbarFolder")          = pure $ Just ToolbarFolder
+        convertToRoot (String "placesRoot")             = pure $ Just PlacesRoot
+        convertToRoot (String "tagsFolder")             = pure $ Just TagsFolder
+        convertToRoot  _                                = fail "undefined root tag value"
+
+parseValue :: Object -> Parser (Either Integer T.Text)
 parseValue x = case H.lookup "value" x of
     Nothing -> fail "key value not present"
     Just v  -> failParse v
-
-failParse :: Value -> Parser (Either Integer Text)
-failParse (String v) = pure $ Right v
-failParse (Number v) = pure $ Left $ truncate $ toRational v -- Should not have to do this cos its fucking integers in the json
-failParse _          = fail "Useless"
+    where
+        failParse :: Value -> Parser (Either Integer T.Text)
+        failParse (String v) = pure $ Right v
+        failParse (Number v) = pure $ Left $ truncate $ toRational v -- Should not have to do this cos its fucking integers in the json
+        failParse _          = fail "Useless"
 
 main :: IO ()
 main = do
@@ -101,29 +135,63 @@ main = do
     let y = eitherDecode' test :: Either String Primary
 
     -- Primary
---    putStrLn $ unpack $ processJSON (pack . show . dateAdded) y
---    putStrLn $ unpack $ processJSON (pack . show . id) y
---    putStrLn $ unpack $ processJSON (pack . show . fromMaybe 0 . index) y
---    putStrLn $ unpack $ processJSON (pack . show . lastModified) y
---    putStrLn $ unpack $ processJSON (pack . show . fromMaybe 0 . parent) y
---    putStrLn $ unpack $ processJSON (fromMaybe "" . title) y
-    putStrLn $ unpack $ processJSON ptype y
---    putStrLn $ unpack $ processJSON (fromMaybe "" . uri) y
-    putStrLn $ unpack $ processJSON (fromMaybe "" . root) y
---    putStrLn $ unpack $ processJSON (fromMaybe "" . charset) y
+--    putStrLn $ T.unpack $ processJSON (T.pack . show . dateAdded) y
+--    putStrLn $ T.unpack $ processJSON (T.pack . show . id) y
+--    putStrLn $ T.unpack $ processJSON (T.pack . show . fromMaybe 0 . index) y
+--    putStrLn $ T.unpack $ processJSON (T.pack . show . lastModified) y
+--    putStrLn $ T.unpack $ processJSON (T.pack . show . fromMaybe 0 . parent) y
+--    putStrLn $ T.unpack $ processJSON (fromMaybe "" . title) y
+--    putStrLn $ T.unpack $ processJSON (T.pack . show . ptype) y
+--    putStrLn $ T.unpack $ processJSON (fromMaybe "" . uri) y
+--    putStrLn $ T.unpack $ processJSON (T.pack . show . root) y
+--    putStrLn $ T.unpack $ processJSON (fromMaybe "" . charset) y
 
     -- Annos
---    putStrLn $ unpack $ processJSON (iterList (pack . show . expires) . annos) y
---    putStrLn $ unpack $ processJSON (iterList (pack . show . flags) . annos) y
---    putStrLn $ unpack $ processJSON (iterList (fromMaybe "" . mimeType) . annos) y
-    putStrLn $ unpack $ processJSON (iterList name . annos) y
---    putStrLn $ unpack $ processJSON (iterList (pack . show . atype) . annos) y
---    putStrLn $ unpack $ processJSON (iterList (procValue . value) . annos) y
+--    putStrLn $ T.unpack $ processJSON (iterList (T.pack . show . expires) . annos) y
+--    putStrLn $ T.unpack $ processJSON (iterList (T.pack . show . flags) . annos) y
+--    putStrLn $ T.unpack $ processJSON (iterList (fromMaybe "" . mimeType) . annos) y
+--    putStrLn $ T.unpack $ processJSON (iterList name . annos) y
+--    putStrLn $ T.unpack $ processJSON (iterList (T.pack . show . atype) . annos) y
+--    putStrLn $ T.unpack $ processJSON (iterList (procValue . value) . annos) y
+
+    putStrLn $ T.unpack $ processJSON' y
 
     where
-        procValue :: Either Integer Text -> Text
-        procValue (Left x)  = pack $ show x
+        procValue :: Either Integer T.Text -> T.Text
+        procValue (Left x)  = T.pack $ show x
         procValue (Right x) = x
+
+        processJSON' :: Either String Primary -> T.Text
+        processJSON' (Left x)  = T.pack x
+        processJSON' (Right x) = showJSON $ findBookmarksMenuChildren x
+
+        showJSON :: Maybe Primary -> T.Text
+        showJSON Nothing  = ""
+        showJSON (Just x) = processJSON (T.pack . show . root) $ Right x
+
+
+-- PlacesRoot
+--  - UnfiledBookmarksFolder
+--  - TagsFolder
+--  - ToolbarFolder
+--  - BookmarksMenuFolder
+--      - Proceed
+findBookmarksMenuChildren :: Primary -> Maybe Primary
+findBookmarksMenuChildren x
+    | isBookmarksMenuFolder x = Just x
+    | isUnset x               = Nothing
+    | otherwise               = mapChildren $ children x
+    where
+        mapChildren :: Maybe [Primary] -> Maybe Primary
+        mapChildren Nothing   = Nothing
+        mapChildren (Just xs) = listToMaybe $ mapMaybe findBookmarksMenuChildren xs
+
+        isBookmarksMenuFolder :: Primary -> Bool
+        isBookmarksMenuFolder x = maybe False (== BookmarkMenuFolder) (root x)
+
+        isUnset :: Primary -> Bool
+        isUnset x = maybe True (\_ -> False) (root x)
+
 
 
 -- TODO:
@@ -135,6 +203,7 @@ main = do
 -- * Finally sort the folder, url, then merge the list
 -- * Fix up the `index` ordering of each entries
 --
+--
 -- URL Staleness check
 -- * Keep a list of already checked urls (borrow code from hakyll)
 -- * Check each url one by one, then output the stale urls
@@ -144,22 +213,21 @@ main = do
 -- * May want to? strip the bookmark anon description, its kind of useless for me
 
 
-
-processJSON :: (Primary -> Text) -> Either String Primary -> Text
-processJSON _ (Left x)  = pack x
+processJSON :: (Primary -> T.Text) -> Either String Primary -> T.Text
+processJSON _ (Left x)  = T.pack x
 processJSON f (Right x) = iterChild f $ Just [x]
 
-iterChild :: (Primary -> Text) -> Maybe [Primary] -> Text
+iterChild :: (Primary -> T.Text) -> Maybe [Primary] -> T.Text
 iterChild _ Nothing   = ""
 iterChild f (Just xs) = foldl buildString "" xs
     where
-        buildString :: Text -> Primary -> Text
-        buildString a b = foldl append "" [a, f b, "\n", (iterChild f $ children b)]
+        buildString :: T.Text -> Primary -> T.Text
+        buildString a b = foldl T.append "" [a, f b, "\n", (iterChild f $ children b)]
 
 -- Text list
-iterList :: (Annos -> Text) -> Maybe [Annos] -> Text
+iterList :: (Annos -> T.Text) -> Maybe [Annos] -> T.Text
 iterList _ Nothing   = ""
 iterList f (Just xs) = foldl buildString "" xs
     where
-        buildString :: Text -> Annos -> Text
-        buildString a b = foldl append "" [a, f b, "\n"]
+        buildString :: T.Text -> Annos -> T.Text
+        buildString a b = foldl T.append "" [a, f b, "\n"]
