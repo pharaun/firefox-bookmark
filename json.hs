@@ -20,16 +20,17 @@
 --      ],
 -- u'uri': u'http://en.wikipedia.org/wiki/RAID'}],
 
-import Prelude hiding (concat, id)
+import Prelude hiding (id)
 import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (mzero, liftM)
 import Data.Aeson
 import Data.Aeson.Types (Parser)
 import Data.Maybe
 import Data.Either
-import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
+import qualified Data.List as L
 
 data Root = BookmarkMenuFolder | PlacesRoot | TagsFolder | ToolbarFolder | UnfiledBookmarksFolder
     deriving (Show, Eq)
@@ -85,7 +86,7 @@ instance FromJSON Primary where
     parseJSON _ = mzero
 
 instance FromJSON Annos where
-    parseJSON (Object v) = do
+    parseJSON (Object v) =
         Annos
         <$> (v .: "expires")
         <*> (v .: "flags")
@@ -131,7 +132,7 @@ parseValue x = case H.lookup "value" x of
 
 main :: IO ()
 main = do
-    test <- L.readFile "./bookmarks-2013-02-22.json"
+    test <- BL.readFile "./bookmarks-2013-02-22.json"
     let y = eitherDecode' test :: Either String Primary
 
     -- Primary
@@ -167,8 +168,25 @@ main = do
 
         showJSON :: Maybe Primary -> T.Text
         showJSON Nothing  = ""
-        showJSON (Just x) = processJSON (T.pack . show . root) $ Right x
+        showJSON (Just x) = processJSON (fromMaybe "" . title) $ Right x
 
+
+getChildren :: Primary -> [Primary]
+getChildren = concat . maybeToList . children
+
+breadthFirst :: Primary -> [Primary]
+breadthFirst x = breadthFirst' [] [x]
+    where
+        breadthFirst' :: [Primary] -> [Primary] -> [Primary]
+        breadthFirst' x [] = x
+        breadthFirst' x y  = breadthFirst' (x ++ y) (concat $ map getChildren y)
+
+depthFirst :: Primary -> [Primary]
+depthFirst x = depthFirst' [x]
+    where
+        depthFirst' :: [Primary] -> [Primary]
+        depthFirst' []     = []
+        depthFirst' (x:xs) = [x] ++ depthFirst' (getChildren x) ++ depthFirst' xs
 
 -- PlacesRoot
 --  - UnfiledBookmarksFolder
@@ -177,33 +195,35 @@ main = do
 --  - BookmarksMenuFolder
 --      - Proceed
 findBookmarksMenuChildren :: Primary -> Maybe Primary
-findBookmarksMenuChildren x
-    | isBookmarksMenuFolder x = Just x
-    | isUnset x               = Nothing
-    | otherwise               = mapChildren $ children x
+findBookmarksMenuChildren = L.find isBookmarksMenuFolder . breadthFirst
     where
-        mapChildren :: Maybe [Primary] -> Maybe Primary
-        mapChildren Nothing   = Nothing
-        mapChildren (Just xs) = listToMaybe $ mapMaybe findBookmarksMenuChildren xs
-
         isBookmarksMenuFolder :: Primary -> Bool
         isBookmarksMenuFolder x = maybe False (== BookmarkMenuFolder) (root x)
 
-        isUnset :: Primary -> Bool
-        isUnset x = maybe True (\_ -> False) (root x)
-
+-- Get a list of [Primary]
+--  - Break it up via span into pieces using PlaceSeparator
+--  - Filter it by PlacesContainer and sort and descend into their childrens
+--  - Filter by Places and sort
+--  - Repeat the breaking action via span till ran out of place separators
+-- Concat all of the above result
+-- Return it
+--
+-- data PType = Place | PlaceContainer | PlaceSeparator
 
 
 -- TODO:
---
--- Sorting the urls by title (longest to shortest)
--- * Look into loading up each list of children, and sorting by longest to shortest title
--- * Segment it by breaking up the list by "segments" (-----)
--- * Then break it up by folder vs urls
--- * Finally sort the folder, url, then merge the list
--- * Fix up the `index` ordering of each entries
---
---
+-- Sort
+--  - Sort PlacesContainer by title length
+--  - Sort Places by title length
+
+-- TODO:
+-- Fix up the `index` ordering of each entries
+--  - Get a list of [primary] or something
+--  - Descend into each PlaceContainers, and sort the PlaceContainer + Places + PlacesSeparators by list order
+--  - Update the index of each one of these entries
+
+
+-- TODO:
 -- URL Staleness check
 -- * Keep a list of already checked urls (borrow code from hakyll)
 -- * Check each url one by one, then output the stale urls
@@ -222,7 +242,7 @@ iterChild _ Nothing   = ""
 iterChild f (Just xs) = foldl buildString "" xs
     where
         buildString :: T.Text -> Primary -> T.Text
-        buildString a b = foldl T.append "" [a, f b, "\n", (iterChild f $ children b)]
+        buildString a b = foldl T.append "" [a, f b, "\n", iterChild f $ children b]
 
 -- Text list
 iterList :: (Annos -> T.Text) -> Maybe [Annos] -> T.Text
