@@ -136,24 +136,36 @@ main = do
     test <- BL.readFile "./bookmarks-2013-02-22.json"
     let y = eitherDecode' test :: Either String Primary
 
-    putStrLn $ T.unpack $ processJSON' y
+    putStrLn $ T.unpack $ showJSON $ processJSON' y
 
     where
-        processJSON' :: Either String Primary -> T.Text
-        processJSON' (Left x)  = T.pack x
-        processJSON' (Right x) = showJSON $ updateIndexing $ resortBookmarkMenu x
+        processJSON' :: Either String Primary -> Maybe Primary
+        processJSON' (Left x)  = Nothing
+        processJSON' (Right x) = listToMaybe $ updateIndexing [resortBookmarkMenu x]
 
-        showJSON :: Primary -> T.Text
-        showJSON x = processJSON customTitle $ Right x
+        showJSON :: Maybe Primary -> T.Text
+        showJSON Nothing  = "Error"
+        showJSON (Just x) = processJSON customTitle $ Right x
 
         customTitle :: Primary -> T.Text
-        customTitle   (Primary {ptype=PlaceSeparator}) = "s"
-        customTitle x@(Primary {ptype=PlaceContainer}) = "c - " `T.append` extract x
-        customTitle x@(Primary {ptype=Place})          = "p - " `T.append` extract x
+        customTitle x@(Primary {ptype=PlaceSeparator}) = prettyPrint " - s" x
+        customTitle x@(Primary {ptype=PlaceContainer}) = prettyPrint (" - c - " `T.append` extract x) x
+        customTitle x@(Primary {ptype=Place})          = prettyPrint (" - p - " `T.append` extract x) x
+
+        pullIndex :: Primary -> T.Text
+        pullIndex = T.pack . show . fromMaybe 0 . index
+
+        prettyPrint :: T.Text -> Primary -> T.Text
+        prettyPrint t p = (T.justifyRight 3 ' ' $ pullIndex p) `T.append` t
 
 
 rebuildPrimary :: Primary -> [Primary] -> Primary
 rebuildPrimary x y = x { children = if L.null y then Nothing else Just y }
+
+-- If 0 store as None, otherwise Just x
+updateIndex :: Primary -> Integer -> Primary
+updateIndex x 0 = x { index = Nothing }
+updateIndex x y = x { index = Just y }
 
 getChildren :: Primary -> [Primary]
 getChildren = concat . maybeToList . children
@@ -222,8 +234,11 @@ extract x
 --  - Get a list of [primary] or something
 --  - Descend into each PlaceContainers, and sort the PlaceContainer + Places + PlacesSeparators by list order
 --  - Update the index of each one of these entries
-updateIndexing :: Primary -> Primary
-updateIndexing x = x
+updateIndexing :: [Primary] -> [Primary]
+updateIndexing xs = snd $ L.mapAccumL weaveIndexUpdate 0 xs
+    where
+        weaveIndexUpdate :: Integer -> Primary -> (Integer, Primary)
+        weaveIndexUpdate acc x = (acc + 1, updateIndex (rebuildPrimary x (updateIndexing $ getChildren x)) acc)
 
 
 -- TODO:
