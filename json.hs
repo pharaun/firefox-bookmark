@@ -22,7 +22,7 @@
 
 import Prelude hiding (id)
 import Control.Applicative ((<$>), (<*>), pure)
-import Control.Monad (mzero, liftM)
+import Control.Monad (mzero, ap)
 import Data.Aeson
 import Data.Aeson.Types (Parser)
 import Data.Either
@@ -136,140 +136,94 @@ main = do
     test <- BL.readFile "./bookmarks-2013-02-22.json"
     let y = eitherDecode' test :: Either String Primary
 
-    -- Primary
---    putStrLn $ T.unpack $ processJSON (T.pack . show . dateAdded) y
---    putStrLn $ T.unpack $ processJSON (T.pack . show . id) y
---    putStrLn $ T.unpack $ processJSON (T.pack . show . fromMaybe 0 . index) y
---    putStrLn $ T.unpack $ processJSON (T.pack . show . lastModified) y
---    putStrLn $ T.unpack $ processJSON (T.pack . show . fromMaybe 0 . parent) y
---    putStrLn $ T.unpack $ processJSON (fromMaybe "" . title) y
---    putStrLn $ T.unpack $ processJSON (T.pack . show . ptype) y
---    putStrLn $ T.unpack $ processJSON (fromMaybe "" . uri) y
---    putStrLn $ T.unpack $ processJSON (T.pack . show . root) y
---    putStrLn $ T.unpack $ processJSON (fromMaybe "" . charset) y
-
-    -- Annos
---    putStrLn $ T.unpack $ processJSON (iterList (T.pack . show . expires) . annos) y
---    putStrLn $ T.unpack $ processJSON (iterList (T.pack . show . flags) . annos) y
---    putStrLn $ T.unpack $ processJSON (iterList (fromMaybe "" . mimeType) . annos) y
---    putStrLn $ T.unpack $ processJSON (iterList name . annos) y
---    putStrLn $ T.unpack $ processJSON (iterList (T.pack . show . atype) . annos) y
---    putStrLn $ T.unpack $ processJSON (iterList (procValue . value) . annos) y
-
     putStrLn $ T.unpack $ processJSON' y
 
     where
-        procValue :: Either Integer T.Text -> T.Text
-        procValue (Left x)  = T.pack $ show x
-        procValue (Right x) = x
-
         processJSON' :: Either String Primary -> T.Text
         processJSON' (Left x)  = T.pack x
-        processJSON' (Right x) = showJSON $ findBookmarksMenuChildren x
+        processJSON' (Right x) = showJSON $ updateIndexing $ resortBookmarkMenu x
 
-        showJSON :: Maybe Primary -> T.Text
-        showJSON Nothing  = ""
-        showJSON (Just x) = processJSON customTitle $ Right (sortChildrens x)
+        showJSON :: Primary -> T.Text
+        showJSON x = processJSON customTitle $ Right x
 
         customTitle :: Primary -> T.Text
-        customTitle x
-            | ptype x == PlaceSeparator = "s"
-            | ptype x == PlaceContainer = "c - " `T.append` (if isJust $ title x then fromMaybe "" $ title x else fromMaybe "" $ uri x)
-            | ptype x == Place          = "p - " `T.append` (if isJust $ title x then fromMaybe "" $ title x else fromMaybe "" $ uri x)
-            | otherwise                 = "?"
+        customTitle   (Primary {ptype=PlaceSeparator}) = "s"
+        customTitle x@(Primary {ptype=PlaceContainer}) = "c - " `T.append` extract x
+        customTitle x@(Primary {ptype=Place})          = "p - " `T.append` extract x
 
-
-
-breadthFirst :: Primary -> [Primary]
-breadthFirst x = breadthFirst' [] [x]
-    where
-        breadthFirst' :: [Primary] -> [Primary] -> [Primary]
-        breadthFirst' x [] = x
-        breadthFirst' x y  = breadthFirst' (x ++ y) (concatMap getChildren y)
-
-depthFirst :: Primary -> [Primary]
-depthFirst x = depthFirst' [x]
-    where
-        depthFirst' :: [Primary] -> [Primary]
-        depthFirst' []     = []
-        depthFirst' (x:xs) = [x] ++ depthFirst' (getChildren x) ++ depthFirst' xs
 
 rebuildPrimary :: Primary -> [Primary] -> Primary
 rebuildPrimary x y = x { children = if L.null y then Nothing else Just y }
 
-
 getChildren :: Primary -> [Primary]
 getChildren = concat . maybeToList . children
 
-
-sortChildrens :: Primary -> Primary
-sortChildrens x = rebuildPrimary x (custom x)
-    where
-        custom :: Primary -> [Primary]
-        custom x = concatMap reSortByContainer $ sliceBookmarks $ getChildren x
-
+-- Find and update BookMarksMenuChildren
 -- PlacesRoot
 --  - UnfiledBookmarksFolder
 --  - TagsFolder
 --  - ToolbarFolder
 --  - BookmarksMenuFolder
 --      - Proceed
-findBookmarksMenuChildren :: Primary -> Maybe Primary
-findBookmarksMenuChildren = L.find isBookmarksMenuFolder . breadthFirst
+resortBookmarkMenu :: Primary -> Primary
+resortBookmarkMenu = rebuildPrimary `ap` sortMenuChildrens
     where
-        isBookmarksMenuFolder :: Primary -> Bool
-        isBookmarksMenuFolder x = maybe False (== BookmarkMenuFolder) (root x)
+        sortMenuChildrens :: Primary -> [Primary]
+        sortMenuChildrens x
+            | isBookmarksMenu x = concatMap sortPlacesContainer $ sliceBookmarks $ getChildren x
+            | otherwise         = map resortBookmarkMenu $ getChildren x
 
--- Get a list of [Primary]
---  - sliceBookmarks, recurse
---  - reSortByContainer, recurse
---  - Filter by Places and sort
---  - Repeat the breaking action via span till ran out of place separators
--- Concat all of the above result
--- Return it
+        isBookmarksMenu :: Primary -> Bool
+        isBookmarksMenu x = maybe False (== BookmarkMenuFolder) (root x)
 
--- Break it up via span into pieces using PlaceSeparator
+isPlaceX :: PType -> Primary -> Bool
+isPlaceX x y = ptype y == x
+
+-- Break up a list of Primary using PlaceSeparator
 sliceBookmarks :: [Primary] -> [[Primary]]
-sliceBookmarks x = breakBySeparator [[]] x
+sliceBookmarks = breakBySeparator [[]]
     where
         breakBySeparator :: [[Primary]] -> [Primary] -> [[Primary]]
         breakBySeparator x [] = x
         breakBySeparator x y = do
-            let (a, b) = break (\a -> ptype a == PlaceSeparator) y
-            breakBySeparator (x ++ [a] ++ [take 1 b]) (drop 1 b)
+            let (d, n) = break (isPlaceX PlaceSeparator) y
+            breakBySeparator (x ++ [d] ++ [take 1 n]) (drop 1 n)
 
 -- Filter it by PlacesContainer and sort and descend into their childrens
-reSortByContainer :: [Primary] -> [Primary]
-reSortByContainer x
-    | all (\a -> ptype a == PlaceSeparator) x = x
-    | otherwise                               = do
-        let (a, b) = L.partition (\a -> ptype a == PlaceContainer) x
-        sortPrimary (map sortChildrens a) ++ sortPrimary b
+sortPlacesContainer :: [Primary] -> [Primary]
+sortPlacesContainer x
+    | all (isPlaceX PlaceSeparator) x = x
+    | otherwise                       = do
+        let (c, p) = L.partition (isPlaceX PlaceContainer) x
+        sortPrimary (map sortChildrens c) ++ sortPrimary p
+    where
+        sortChildrens :: Primary -> Primary
+        sortChildrens = rebuildPrimary `ap` custom
+            where
+                custom :: Primary -> [Primary]
+                custom = concatMap sortPlacesContainer . sliceBookmarks . getChildren
 
--- Sort
---  - Sort PlacesContainer by title length
---  - Sort Places by title length
+-- Sort by title length then uri length
 sortPrimary :: [Primary] -> [Primary]
 sortPrimary x
-    | all (\a -> ptype a == PlaceSeparator) x = x
-    | otherwise                               = L.sortBy sorter x
+    | all (isPlaceX PlaceSeparator) x = x
+    | otherwise                       = L.sortBy sorter x
     where
-        -- Sort by Title length, uri length, then if not, then treat it as length of 0
         sorter :: Primary -> Primary -> Ordering
         sorter x y = mconcat [compare (T.length $ extract y) (T.length $ extract x), compare (extract x) (extract y)]
 
-        extract :: Primary -> T.Text
-        extract x
-            | isJust (title x) = fromJust $ title x
-            | isJust (uri x)   = fromJust $ uri x
-            | otherwise        = ""
+extract :: Primary -> T.Text
+extract x
+    | isJust (title x) = fromJust $ title x
+    | isJust (uri x)   = fromJust $ uri x
+    | otherwise        = ""
 
-
--- TODO:
 -- Fix up the `index` ordering of each entries
 --  - Get a list of [primary] or something
 --  - Descend into each PlaceContainers, and sort the PlaceContainer + Places + PlacesSeparators by list order
 --  - Update the index of each one of these entries
+updateIndexing :: Primary -> Primary
+updateIndexing x = x
 
 
 -- TODO:
@@ -281,22 +235,16 @@ sortPrimary x
 -- * Tags are probably good/useful, Maybe nice to have something that helps with tagging
 -- * May want to? strip the bookmark anon description, its kind of useless for me
 
-
 processJSON :: (Primary -> T.Text) -> Either String Primary -> T.Text
 processJSON _ (Left x)  = T.pack x
-processJSON f (Right x) = iterChild f $ Just [x]
+processJSON f (Right x) = iterChild True f $ Just [x]
 
-iterChild :: (Primary -> T.Text) -> Maybe [Primary] -> T.Text
-iterChild _ Nothing   = ""
-iterChild f (Just xs) = foldl buildString "" xs
+--iterChild :: Bool -> (Primary -> T.Text) -> Maybe [Primary] -> T.Text
+--iterChild :: Bool -> (Annos -> T.Text) -> Maybe [Annos] -> T.Text -- Only if Bool = False
+iterChild _ _ Nothing   = ""
+iterChild b f (Just xs) = foldl (buildString b) "" xs
     where
-        buildString :: T.Text -> Primary -> T.Text
-        buildString a b = foldl T.append "" [a, f b, "\n", iterChild f $ children b]
-
--- Text list
-iterList :: (Annos -> T.Text) -> Maybe [Annos] -> T.Text
-iterList _ Nothing   = ""
-iterList f (Just xs) = foldl buildString "" xs
-    where
-        buildString :: T.Text -> Annos -> T.Text
-        buildString a b = foldl T.append "" [a, f b, "\n"]
+--        buildString :: Bool -> T.Text -> Primary -> T.Text
+--        buildString :: Bool -> T.Text -> Annos -> T.Text
+        buildString True  a b = foldl T.append "" [a, f b, "\n", iterChild True f $ children b]
+        buildString False a b = foldl T.append "" [a, f b, "\n"]
