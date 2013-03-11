@@ -25,12 +25,13 @@ import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (mzero, liftM)
 import Data.Aeson
 import Data.Aeson.Types (Parser)
-import Data.Maybe
 import Data.Either
+import Data.Maybe
+import Data.Monoid (mconcat)
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.HashMap.Strict as H
-import qualified Data.Text as T
 import qualified Data.List as L
+import qualified Data.Text as T
 
 data Root = BookmarkMenuFolder | PlacesRoot | TagsFolder | ToolbarFolder | UnfiledBookmarksFolder
     deriving (Show, Eq)
@@ -168,18 +169,23 @@ main = do
 
         showJSON :: Maybe Primary -> T.Text
         showJSON Nothing  = ""
-        showJSON (Just x) = processJSON (fromMaybe "" . title) $ Right x
+        showJSON (Just x) = processJSON customTitle $ Right (sortChildrens x)
+
+        customTitle :: Primary -> T.Text
+        customTitle x
+            | ptype x == PlaceSeparator = "s"
+            | ptype x == PlaceContainer = "c - " `T.append` (if isJust $ title x then fromMaybe "" $ title x else fromMaybe "" $ uri x)
+            | ptype x == Place          = "p - " `T.append` (if isJust $ title x then fromMaybe "" $ title x else fromMaybe "" $ uri x)
+            | otherwise                 = "?"
 
 
-getChildren :: Primary -> [Primary]
-getChildren = concat . maybeToList . children
 
 breadthFirst :: Primary -> [Primary]
 breadthFirst x = breadthFirst' [] [x]
     where
         breadthFirst' :: [Primary] -> [Primary] -> [Primary]
         breadthFirst' x [] = x
-        breadthFirst' x y  = breadthFirst' (x ++ y) (concat $ map getChildren y)
+        breadthFirst' x y  = breadthFirst' (x ++ y) (concatMap getChildren y)
 
 depthFirst :: Primary -> [Primary]
 depthFirst x = depthFirst' [x]
@@ -187,6 +193,20 @@ depthFirst x = depthFirst' [x]
         depthFirst' :: [Primary] -> [Primary]
         depthFirst' []     = []
         depthFirst' (x:xs) = [x] ++ depthFirst' (getChildren x) ++ depthFirst' xs
+
+rebuildPrimary :: Primary -> [Primary] -> Primary
+rebuildPrimary x y = x { children = if L.null y then Nothing else Just y }
+
+
+getChildren :: Primary -> [Primary]
+getChildren = concat . maybeToList . children
+
+
+sortChildrens :: Primary -> Primary
+sortChildrens x = rebuildPrimary x (custom x)
+    where
+        custom :: Primary -> [Primary]
+        custom x = concatMap reSortByContainer $ sliceBookmarks $ getChildren x
 
 -- PlacesRoot
 --  - UnfiledBookmarksFolder
@@ -201,20 +221,49 @@ findBookmarksMenuChildren = L.find isBookmarksMenuFolder . breadthFirst
         isBookmarksMenuFolder x = maybe False (== BookmarkMenuFolder) (root x)
 
 -- Get a list of [Primary]
---  - Break it up via span into pieces using PlaceSeparator
---  - Filter it by PlacesContainer and sort and descend into their childrens
+--  - sliceBookmarks, recurse
+--  - reSortByContainer, recurse
 --  - Filter by Places and sort
 --  - Repeat the breaking action via span till ran out of place separators
 -- Concat all of the above result
 -- Return it
---
--- data PType = Place | PlaceContainer | PlaceSeparator
 
+-- Break it up via span into pieces using PlaceSeparator
+sliceBookmarks :: [Primary] -> [[Primary]]
+sliceBookmarks x = breakBySeparator [[]] x
+    where
+        breakBySeparator :: [[Primary]] -> [Primary] -> [[Primary]]
+        breakBySeparator x [] = x
+        breakBySeparator x y = do
+            let (a, b) = break (\a -> ptype a == PlaceSeparator) y
+            breakBySeparator (x ++ [a] ++ [take 1 b]) (drop 1 b)
 
--- TODO:
+-- Filter it by PlacesContainer and sort and descend into their childrens
+reSortByContainer :: [Primary] -> [Primary]
+reSortByContainer x
+    | all (\a -> ptype a == PlaceSeparator) x = x
+    | otherwise                               = do
+        let (a, b) = L.partition (\a -> ptype a == PlaceContainer) x
+        sortPrimary (map sortChildrens a) ++ sortPrimary b
+
 -- Sort
 --  - Sort PlacesContainer by title length
 --  - Sort Places by title length
+sortPrimary :: [Primary] -> [Primary]
+sortPrimary x
+    | all (\a -> ptype a == PlaceSeparator) x = x
+    | otherwise                               = L.sortBy sorter x
+    where
+        -- Sort by Title length, uri length, then if not, then treat it as length of 0
+        sorter :: Primary -> Primary -> Ordering
+        sorter x y = mconcat [compare (T.length $ extract y) (T.length $ extract x), compare (extract x) (extract y)]
+
+        extract :: Primary -> T.Text
+        extract x
+            | isJust (title x) = fromJust $ title x
+            | isJust (uri x)   = fromJust $ uri x
+            | otherwise        = ""
+
 
 -- TODO:
 -- Fix up the `index` ordering of each entries
