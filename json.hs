@@ -25,6 +25,7 @@ import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (mzero, ap)
 import Data.Aeson
 import Data.Aeson.Types (Parser)
+import Data.Attoparsec.Number
 import Data.Either
 import Data.Maybe
 import Data.Monoid (mconcat)
@@ -55,8 +56,8 @@ data Primary = Primary
     , annos :: Maybe [Annos]
     } deriving (Show)
 
-data AType = LoadInSidebar | FolderLastUsed | Description
-    deriving (Show, Eq)
+--data AType = LoadInSidebar | FolderLastUsed | Description
+--    deriving (Show, Eq)
 
 data Annos = Annos
     { expires :: Integer
@@ -131,12 +132,79 @@ parseValue x = case H.lookup "value" x of
         failParse (Number v) = pure $ Left $ truncate $ toRational v -- Should not have to do this cos its fucking integers in the json
         failParse _          = fail "Useless"
 
+--data Primary = Primary
+--    { dateAdded :: Integer
+--    , id :: Integer
+--    , index :: Maybe Integer
+--    , lastModified :: Integer
+--    , parent :: Maybe Integer
+--    , title :: Maybe T.Text
+--    , keyword :: Maybe T.Text
+--    , ptype :: PType
+--    , uri :: Maybe T.Text
+--    , children :: Maybe [Primary]
+--    , root :: Maybe Root
+--    , charset :: Maybe T.Text
+--    , annos :: Maybe [Annos]
+--    } deriving (Show)
+--
+instance ToJSON Primary where
+    toJSON p = object
+        [ "dateAdded"    .= dateAdded p
+        , "id"           .= id p
+        , "index"        .= index p
+        , "lastModified" .= lastModified p
+        , "parent"       .= parent p
+        , "title"        .= title p
+        , "keyword"      .= keyword p
+        , "type"         .= (dumpPType $ ptype p)
+        , "uri"          .= uri p
+        , "children"     .= children p
+        , "root"         .= (dumpRoot $ root p)
+        , "charset"      .= charset p
+        , "annos"        .= annos p
+        ]
+
+instance ToJSON Annos where
+    toJSON p = object
+        [ "expires"  .= expires p
+        , "flags"    .= flags p
+        , "mimeType" .= mimeType p
+        , "name"     .= name p
+        , "type"     .= atype p
+        , "value"    .= (dumpValue $ value p)
+        ]
+
+dumpValue :: (Either Integer T.Text) -> Value
+dumpValue (Left x)  = Number $ I x
+dumpValue (Right x) = String x
+
+dumpPType :: PType -> Value
+dumpPType PlaceSeparator = String "text/x-moz-place-separator"
+dumpPType PlaceContainer = String "text/x-moz-place-container"
+dumpPType Place          = String "text/x-moz-place"
+
+dumpRoot :: Maybe Root -> Value
+dumpRoot (Just UnfiledBookmarksFolder) = String "unfiledBookmarksFolder"
+dumpRoot (Just BookmarkMenuFolder) = String "bookmarksMenuFolder"
+dumpRoot (Just ToolbarFolder) = String "toolbarFolder"
+dumpRoot (Just PlacesRoot) = String "placesRoot"
+dumpRoot (Just TagsFolder) = String "tagsFolder"
+dumpRoot Nothing = Null
+
 main :: IO ()
 main = do
+    -- Load the file
     test <- BL.readFile "./bookmarks-2013-02-22.json"
-    let y = eitherDecode' test :: Either String Primary
+    let x = eitherDecode' test :: Either String Primary
+    let y = processJSON' x
 
-    putStrLn $ T.unpack $ showJSON $ processJSON' y
+    -- Print
+    putStrLn $ T.unpack $ showJSON y
+
+    -- Dump to file
+    let z = encode y
+    BL.writeFile "./test-export.json" z
 
     where
         processJSON' :: Either String Primary -> Maybe Primary
