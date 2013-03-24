@@ -34,6 +34,9 @@ import qualified Data.HashMap.Strict as H
 import qualified Data.List as L
 import qualified Data.Text as T
 
+-- Strange dependency, its for calculating proportional font width of a string
+import Graphics.Rendering.Pango
+
 data Root = BookmarkMenuFolder | PlacesRoot | TagsFolder | ToolbarFolder | UnfiledBookmarksFolder
     deriving (Show, Eq)
 
@@ -54,6 +57,7 @@ data Primary = Primary
     , root :: Maybe Root
     , charset :: Maybe T.Text
     , annos :: Maybe [Annos]
+    , pangoLength :: Double
     } deriving (Show)
 
 --data AType = LoadInSidebar | FolderLastUsed | Description
@@ -85,6 +89,7 @@ instance FromJSON Primary where
         <*> parseRoot v
         <*> (v .:? "charset")
         <*> (parseJSON =<< (v .:? "annos" .!= Null))
+        <*> (setZero)
     parseJSON _ = mzero
 
 instance FromJSON Annos where
@@ -97,6 +102,9 @@ instance FromJSON Annos where
         <*> (v .: "type")
         <*> parseValue v
     parseJSON _ = mzero
+
+setZero :: Parser Double
+setZero = pure 0
 
 parsePType :: Object -> Parser PType
 parsePType x = case H.lookup "type" x of
@@ -180,17 +188,29 @@ main :: IO ()
 main = do
     -- Load the file
     test <- BL.readFile "./bookmarks-2013-02-22.json"
-    let x = eitherDecode test :: Either String Primary
+    let w = eitherDecode test :: Either String Primary
+
+    -- Set the string length
+    pango <- initPango
+    x <- processLength pango w
+
+    -- Process the json file
     let y = processJSON' x
 
     -- Print
-    --putStrLn $ T.unpack $ showJSON y
+    putStrLn $ T.unpack $ showJSON y
 
     -- Dump to file
     let z = encode y
     BL.writeFile "./test-export.json" z
 
     where
+        processLength :: (PangoContext, [PangoAttribute]) -> Either String Primary -> IO (Either String Primary)
+        processLength _ (Left x)  = return $ Left x
+        processLength p (Right x) = do
+            a <- generateLength p x
+            return $ Right a
+
         processJSON' :: Either String Primary -> Maybe Primary
         processJSON' (Left x)  = Nothing
         processJSON' (Right x) = listToMaybe $ updateIndexing [resortBookmarkMenu x]
@@ -201,14 +221,92 @@ main = do
 
         customTitle :: Primary -> T.Text
         customTitle x@(Primary {ptype=PlaceSeparator}) = prettyPrint " - s" x
-        customTitle x@(Primary {ptype=PlaceContainer}) = prettyPrint (" - c - " `T.append` extract x) x
-        customTitle x@(Primary {ptype=Place})          = prettyPrint (" - p - " `T.append` extract x) x
+        customTitle x@(Primary {ptype=PlaceContainer}) = prettyPrint (" - c - " `T.append` len x `T.append` " - " `T.append` extract x) x
+        customTitle x@(Primary {ptype=Place})          = prettyPrint (" - p - " `T.append` len x `T.append` " - " `T.append` extract x) x
+
+        len :: Primary -> T.Text
+        len x = T.pack $ show $ pangoLength x
 
         pullIndex :: Primary -> T.Text
         pullIndex = T.pack . show . fromMaybe 0 . index
 
         prettyPrint :: T.Text -> Primary -> T.Text
         prettyPrint t p = (T.justifyRight 3 ' ' $ pullIndex p) `T.append` t
+
+--
+-- Init the pango context for generating pango length
+--
+initPango :: IO (PangoContext, [PangoAttribute])
+initPango = do
+    -- Setup context and dpi
+    a <- cairoFontMapGetDefault
+    cairoFontMapSetResolution a 100
+
+    -- Get pango context
+    p <- cairoCreateContext $ Just a
+
+    -- Settings
+    let pa = [AttrFamily 0 (-1) "Sans", AttrSize 0 (-1) 10]
+
+    return (p, pa)
+
+goodCharacterLength :: (PangoContext, [PangoAttribute]) -> String -> IO [Double]
+goodCharacterLength (p, pa) x = if L.null x then return [0] else do
+    -- Whole string length/size - this works but it screws up with CJK characters
+    pi <- pangoItemize p x pa
+    gi <- pangoShape $ head pi
+
+    -- Discrete glyph length
+    glyphItemGetLogicalWidths gi Nothing
+
+
+badCharacterLength :: (PangoContext, [PangoAttribute]) -> String -> IO [Double]
+badCharacterLength (p, pa) x = if L.null x then return [0] else mapM (\a -> (do
+        -- PangoItem
+        pi <- pangoItemize p [a] pa
+        gi <- pangoShape $ head pi
+
+        -- Discrete glyph length
+        w <- glyphItemGetLogicalWidths gi Nothing
+        return $ head w)) x
+
+-- (Good, Bad)
+splitString :: String -> (String, String)
+splitString = L.partition isIn
+    where
+        isIn :: Char -> Bool
+        isIn x = isJust $ L.elemIndex x goodChar
+
+        goodChar :: String
+        goodChar = "`~<=>|°_-,;:!?/.·'’\"“”«»()[]{}§©®™@$*&#%+→—0123³456789aAáàåæbBcCdDeEéfFgGhHiIjJkKlLmMnNoOóôöōpPqQrRsStTuUüvVwWxXyYzZþ"
+
+-- Update the pango length
+updatePangoLength :: Primary -> Double -> Primary
+updatePangoLength x y = x { pangoLength = y }
+
+generateLength :: (PangoContext, [PangoAttribute]) -> Primary -> IO Primary
+generateLength p x = do
+    a <- generateLengthChildrens p x
+    return $ rebuildPrimary x a
+    where
+        generateLengthChildrens :: (PangoContext, [PangoAttribute]) -> Primary -> IO [Primary]
+        generateLengthChildrens p x = do
+            let c = getChildren x
+            a <- mapM (updateLength p) c
+            mapM (generateLength p) a
+
+        updateLength :: (PangoContext, [PangoAttribute]) -> Primary -> IO Primary
+        updateLength p x = do
+            len <- calcLength p x
+            return $ updatePangoLength x len
+
+        calcLength :: (PangoContext, [PangoAttribute]) -> Primary -> IO Double
+        calcLength p x = do
+            let (good, bad) = splitString $ T.unpack $ extract x
+            goodLen <- goodCharacterLength p good
+            badLen <- badCharacterLength p bad
+
+            return $ L.foldl' (+) 0 (goodLen ++ badLen)
 
 
 rebuildPrimary :: Primary -> [Primary] -> Primary
