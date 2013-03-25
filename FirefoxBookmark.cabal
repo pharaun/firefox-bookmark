@@ -5,6 +5,7 @@ version:             0.1.0.0
 synopsis:            Resorts the Firefox bookmark json file.
 description:         This is a silly little project for re-sorting the firefox bookmarks's sorting order based on Title length, supports monospace and proportional sorting.
 homepage:            https://github.com/pharaun/FirefoxBookmark
+category:            Web
 license:             BSD3
 license-file:        LICENSE
 author:              Anja Berens
@@ -12,12 +13,22 @@ maintainer:          pharaun666@gmail.com
 build-type:          Simple
 cabal-version:       >=1.8
 
-executable bookmarkSorter
-  -- .hs or .lhs file containing the Main module.
-  -- main-is:
+source-repository head
+  type: git
+  location: git://github.com/pharaun/FirefoxBookmark.git
 
-  -- Modules included in this executable, other than Main.
-  -- other-modules:
+executable firefoxSort
+  Hs-source-dirs: src
+  main-is: Main.hs
 
-  -- Other library packages from which modules are imported.
-  build-depends:       base ==4.5.*
+  build-depends:
+    base == 4.5.*,
+    aeson,
+    attoparsec,
+    bytestring,
+    mtl,
+    optparse-applicative,
+    pango,
+    text,
+    unordered-containers
+

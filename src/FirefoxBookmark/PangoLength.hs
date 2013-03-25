@@ -13,6 +13,7 @@ import qualified Data.List as L
 import qualified Data.Text as T
 
 -- Local imports
+-- TODO: Clean up FirefoxBookmark dependency so that this can be exported into Graphics.Rendering.PangoLength
 import FirefoxBookmark.Types
 import FirefoxBookmark.Sorter
 

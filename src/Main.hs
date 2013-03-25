@@ -1,58 +1,55 @@
 {-# LANGUAGE OverloadedStrings #-}
--- {u'dateAdded': 1355015138514222,
--- u'id': 5876,
--- u'index': 11,
--- u'lastModified': 1355015138514222,
--- u'parent': 5864,
--- u'title': None,
--- u'keyword': u'some keywords',
--- u'type': u'text/x-moz-place',
--- maybe - u'children': [],
--- maybe - u'root': u'unfiledBookmarksFolder',
--- maybe - u'charset': u'UTF-8',
--- maybe - u'annos': [
---     {u'expires': 4,
---      u'flags': 0,
---      u'mimeType': None,
---      u'name': u'bookmarkProperties/description',
---      u'type': 3,
---      u'value': u'foobar'}
---      ],
--- u'uri': u'http://en.wikipedia.org/wiki/RAID'}],
-
+import Control.Monad.Reader
 import Data.Aeson (encode, eitherDecode)
 import Data.Maybe
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 
-import Control.Monad.Reader
-
-
 -- Local imports
-import FirefoxBookmark.Types
 import FirefoxBookmark.PangoLength
 import FirefoxBookmark.Sorter
+import FirefoxBookmark.Types
+import Options
 
+-- TODO:
+-- URL Staleness check
+-- * Keep a list of already checked urls (borrow code from hakyll)
+-- * Check each url one by one, then output the stale urls
+--
+-- Tags/Anon cleanup?
+-- * Tags are probably good/useful, Maybe nice to have something that helps with tagging
+-- * May want to? strip the bookmark anon description, its kind of useless for me
+--
+-- Making the customizable debugging logger work
+--
+-- Fixing the code for supporting monospaced sorting options
+--
+-- Massivly improving error handling code, right now things are a bit adhoc in the main
 
 main :: IO ()
 main = do
-    -- Load the file
-    test <- BL.readFile "./bookmarks-2013-02-22.json"
-    let w = eitherDecode test :: Either String Primary
+    -- Quick and dirty options
+    opt <- getOptions
+
+    -- TODO: add error handling code
+    input <- BL.readFile $ inputFile opt
+    let bookmarks = eitherDecode input :: Either String Primary
 
     -- Set the string length
-    pango <- initPango
-    x <- processLength pango w
+    labeledBookmarks <- case typeOfSort opt of
+        Monospaced   -> error "Monospaced option/support is not implemented yet"
+        Proportional -> do
+            pango <- initPango
+            processLength pango bookmarks
 
     -- Process the json file
-    let y = processJSON' x
+    let sortedBookmarks = processJSON' labeledBookmarks
 
-    -- Print
-    putStrLn $ T.unpack $ showJSON y
+    -- Print debugging output
+    when (debugPrint opt) (putStrLn $ T.unpack $ showJSON sortedBookmarks)
 
     -- Dump to file
-    let z = encode y
-    BL.writeFile "./test-export.json" z
+    BL.writeFile (outputFile opt) $ encode sortedBookmarks
 
     where
         processLength :: PangoType -> Either String Primary -> IO (Either String Primary)
@@ -81,17 +78,7 @@ main = do
         pullIndex = T.pack . show . fromMaybe 0 . index
 
         prettyPrint :: T.Text -> Primary -> T.Text
-        prettyPrint t p = (T.justifyRight 3 ' ' $ pullIndex p) `T.append` t
-
-
--- TODO:
--- URL Staleness check
--- * Keep a list of already checked urls (borrow code from hakyll)
--- * Check each url one by one, then output the stale urls
---
--- Tags/Anon cleanup?
--- * Tags are probably good/useful, Maybe nice to have something that helps with tagging
--- * May want to? strip the bookmark anon description, its kind of useless for me
+        prettyPrint t p = T.justifyRight 3 ' ' $ pullIndex p `T.append` t
 
 processJSON :: (Primary -> T.Text) -> Either String Primary -> T.Text
 processJSON _ (Left x)  = T.pack x

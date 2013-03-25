@@ -80,6 +80,7 @@ sortPrimary x
     | otherwise                       = L.sortBy sorter x
     where
         sorter :: Primary -> Primary -> Ordering
+        -- TODO: add support for either monospaced or proportional sorting
 --        sorter a b = mconcat [compare (T.length $ extract b) (T.length $ extract a), compare (extract a) (extract b)]
         sorter a b = mconcat [compare (pangoLength b) (pangoLength a), compare (extract a) (extract b)]
 
