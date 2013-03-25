@@ -1,0 +1,22 @@
+firefoxSort - Sort firefox bookmarks
+
+Usage: firefoxSort Input Output [--debug] [--monospaced]
+  Resort the firefox bookmarks using the length of the bookmark Title or Url
+
+Available options:
+  -h,--help                Show this help text
+  --debug                  Print out debugging logs
+  --monospaced             Enable to have monospaced sorting (TODO: not functional yet)
+
+As the man page above describes, this is a silly tool for resorting your firefox bookmarks
+via the backup json dump.
+
+Basically it sorts the bookmarks by the visual length (proportional) of the
+bookmark title, (if failing that, the url) then by the content of the
+title/url.
+
+It has a couple of basic rules:
+	* Honor the bookmark separator bars, IE anything before or after a
+		separator bar will always be before or after.
+	* Sort the Folders first.
+	* Finally the actual bookmarks will be sorted.
