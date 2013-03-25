@@ -34,6 +34,8 @@ import qualified Data.HashMap.Strict as H
 import qualified Data.List as L
 import qualified Data.Text as T
 
+import Control.Monad.Reader
+
 -- Strange dependency, its for calculating proportional font width of a string
 import Graphics.Rendering.Pango
 
@@ -205,10 +207,10 @@ main = do
     BL.writeFile "./test-export.json" z
 
     where
-        processLength :: (PangoContext, [PangoAttribute]) -> Either String Primary -> IO (Either String Primary)
+        processLength :: PangoType -> Either String Primary -> IO (Either String Primary)
         processLength _ (Left x)  = return $ Left x
         processLength p (Right x) = do
-            a <- generateLength p x
+            a <- runReaderT (generateLength x) p
             return $ Right a
 
         processJSON' :: Either String Primary -> Maybe Primary
@@ -233,10 +235,13 @@ main = do
         prettyPrint :: T.Text -> Primary -> T.Text
         prettyPrint t p = (T.justifyRight 3 ' ' $ pullIndex p) `T.append` t
 
+
+type PangoType = (PangoContext, [PangoAttribute])
+
 --
 -- Init the pango context for generating pango length
 --
-initPango :: IO (PangoContext, [PangoAttribute])
+initPango :: IO PangoType
 initPango = do
     -- Setup context and dpi
     a <- cairoFontMapGetDefault
@@ -250,25 +255,31 @@ initPango = do
 
     return (p, pa)
 
-goodCharacterLength :: (PangoContext, [PangoAttribute]) -> String -> IO [Double]
-goodCharacterLength (p, pa) x = if L.null x then return [0] else do
-    -- Whole string length/size - this works but it screws up with CJK characters
-    pi <- pangoItemize p x pa
-    gi <- pangoShape $ head pi
-
-    -- Discrete glyph length
-    glyphItemGetLogicalWidths gi Nothing
-
-
-badCharacterLength :: (PangoContext, [PangoAttribute]) -> String -> IO [Double]
-badCharacterLength (p, pa) x = if L.null x then return [0] else mapM (\a -> (do
-        -- PangoItem
-        pi <- pangoItemize p [a] pa
-        gi <- pangoShape $ head pi
+goodCharacterLength :: String -> ReaderT PangoType IO [Double]
+goodCharacterLength x
+    | L.null x  = return [0]
+    | otherwise = do
+        (p, pa) <- ask
+        -- Whole string length/size - this works but it screws up with CJK characters
+        pi <- liftIO $ pangoItemize p x pa
+        gi <- liftIO $ pangoShape $ head pi
 
         -- Discrete glyph length
-        w <- glyphItemGetLogicalWidths gi Nothing
-        return $ head w)) x
+        liftIO $ glyphItemGetLogicalWidths gi Nothing
+
+
+badCharacterLength :: String -> ReaderT PangoType IO [Double]
+badCharacterLength x
+    | L.null x  = return [0]
+    | otherwise = forM x (\a -> do
+        (p, pa) <- ask
+        -- PangoItem
+        pi <- liftIO $ pangoItemize p [a] pa
+        gi <- liftIO $ pangoShape $ head pi
+
+        -- Discrete glyph length
+        w <- liftIO $ glyphItemGetLogicalWidths gi Nothing
+        return $ head w)
 
 -- (Good, Bad)
 splitString :: String -> (String, String)
@@ -280,33 +291,27 @@ splitString = L.partition isIn
         goodChar :: String
         goodChar = "`~<=>|°_-,;:!?/.·'’\"“”«»()[]{}§©®™@$*&#%+→—0123³456789aAáàåæbBcCdDeEéfFgGhHiIjJkKlLmMnNoOóôöōpPqQrRsStTuUüvVwWxXyYzZþ"
 
--- Update the pango length
-updatePangoLength :: Primary -> Double -> Primary
-updatePangoLength x y = x { pangoLength = y }
-
-generateLength :: (PangoContext, [PangoAttribute]) -> Primary -> IO Primary
-generateLength p x = do
-    a <- generateLengthChildrens p x
-    return $ rebuildPrimary x a
+generateLength :: Primary -> ReaderT PangoType IO Primary
+generateLength x = rebuildPrimary x <$> generateLengthChildrens x
     where
-        generateLengthChildrens :: (PangoContext, [PangoAttribute]) -> Primary -> IO [Primary]
-        generateLengthChildrens p x = do
-            let c = getChildren x
-            a <- mapM (updateLength p) c
-            mapM (generateLength p) a
+        generateLengthChildrens :: Primary -> ReaderT PangoType IO [Primary]
+        generateLengthChildrens x = mapM generateLength =<< (mapM updateLength $ getChildren x)
 
-        updateLength :: (PangoContext, [PangoAttribute]) -> Primary -> IO Primary
-        updateLength p x = do
-            len <- calcLength p x
-            return $ updatePangoLength x len
+        updateLength :: Primary -> ReaderT PangoType IO Primary
+        updateLength x = updatePangoLength x <$> calcLength x
 
-        calcLength :: (PangoContext, [PangoAttribute]) -> Primary -> IO Double
-        calcLength p x = do
+        calcLength :: Primary -> ReaderT PangoType IO Double
+        calcLength x = do
+            -- We call upon reader here to dump the pango stuff
             let (good, bad) = splitString $ T.unpack $ extract x
-            goodLen <- goodCharacterLength p good
-            badLen <- badCharacterLength p bad
+            goodLen <- goodCharacterLength good
+            badLen <- badCharacterLength bad
 
             return $ L.foldl' (+) 0 (goodLen ++ badLen)
+
+        -- Update the pango length
+        updatePangoLength :: Primary -> Double -> Primary
+        updatePangoLength x y = x { pangoLength = y }
 
 
 rebuildPrimary :: Primary -> [Primary] -> Primary
@@ -372,7 +377,8 @@ sortPrimary x
     | otherwise                       = L.sortBy sorter x
     where
         sorter :: Primary -> Primary -> Ordering
-        sorter x y = mconcat [compare (T.length $ extract y) (T.length $ extract x), compare (extract x) (extract y)]
+--        sorter x y = mconcat [compare (T.length $ extract y) (T.length $ extract x), compare (extract x) (extract y)]
+        sorter x y = mconcat [compare (pangoLength y) (pangoLength x), compare (extract x) (extract y)]
 
 extract :: Primary -> T.Text
 extract x
